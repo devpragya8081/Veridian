@@ -412,3 +412,529 @@ pub trait VeridianContract {
     fn set_issuance_fee(e: Env, new_fee: i128);
     fn transfer_admin(e: Env, new_admin: Address);
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use soroban_sdk::testutils::Address as TestAddress;
+
+    fn generate_metadata_hash() -> Vec<u8> {
+        vec![0u8; 32]
+    }
+
+    fn generate_data_hash() -> Vec<u8> {
+        vec![1u8; 32]
+    }
+
+    #[test]
+    fn test_initialize() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        VeridianContract::initialize(env.clone(), admin.clone(), 1000, 100);
+
+        let config = get_config(&env);
+        assert_eq!(config.admin, admin);
+        assert_eq!(config.registration_fee, 1000);
+        assert_eq!(config.issuance_fee, 100);
+        assert_eq!(config.treasury_balance, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Contract already initialized")]
+    fn test_initialize_twice() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        VeridianContract::initialize(env.clone(), admin.clone(), 1000, 100);
+        VeridianContract::initialize(env.clone(), admin.clone(), 1000, 100);
+    }
+
+    #[test]
+    fn test_register_issuer() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        let issuer = TestAddress(&[2u8; 32]);
+
+        VeridianContract::initialize(env.clone(), admin.clone(), 0, 0);
+
+        let name = String::from_str(&env, "MIT");
+        let metadata_hash = generate_metadata_hash();
+        let result = VeridianContract::register_issuer(
+            env.clone(),
+            name.clone(),
+            IssuerCategory::Education,
+            metadata_hash.clone(),
+        );
+
+        assert_eq!(result, issuer);
+
+        let stored_issuer = get_issuer(&env, &issuer).unwrap();
+        assert_eq!(stored_issuer.name, name);
+        assert_eq!(stored_issuer.category, IssuerCategory::Education);
+        assert_eq!(stored_issuer.active, true);
+        assert_eq!(stored_issuer.credentials_issued, 0);
+
+        let count = get_issuer_count(&env);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Issuer already registered")]
+    fn test_register_issuer_twice() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        let issuer = TestAddress(&[2u8; 32]);
+
+        VeridianContract::initialize(env.clone(), admin.clone(), 0, 0);
+
+        let metadata_hash = generate_metadata_hash();
+        VeridianContract::register_issuer(
+            env.clone(),
+            String::from_str(&env, "MIT"),
+            IssuerCategory::Education,
+            metadata_hash.clone(),
+        );
+
+        VeridianContract::register_issuer(
+            env.clone(),
+            String::from_str(&env, "MIT"),
+            IssuerCategory::Education,
+            metadata_hash.clone(),
+        );
+    }
+
+    #[test]
+    fn test_issue_credential() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        let issuer = TestAddress(&[2u8; 32]);
+        let holder = TestAddress(&[3u8; 32]);
+
+        VeridianContract::initialize(env.clone(), admin.clone(), 0, 0);
+
+        let metadata_hash = generate_metadata_hash();
+        VeridianContract::register_issuer(
+            env.clone(),
+            String::from_str(&env, "MIT"),
+            IssuerCategory::Education,
+            metadata_hash,
+        );
+
+        let credential_id = VeridianContract::issue_credential(
+            env.clone(),
+            holder.clone(),
+            String::from_str(&env, "Degree"),
+            generate_data_hash(),
+            0,
+        );
+
+        assert_eq!(credential_id, 1);
+
+        let credential = get_credential(&env, 1).unwrap();
+        assert_eq!(credential.issuer, issuer);
+        assert_eq!(credential.holder, holder);
+        assert_eq!(credential.credential_type, String::from_str(&env, "Degree"));
+        assert_eq!(credential.status, CredentialStatus::Active);
+
+        let holder_creds = get_credentials_by_holder(&env, holder);
+        assert_eq!(holder_creds.len(), 1);
+        assert_eq!(holder_creds[0], 1);
+
+        let issuer_creds = get_credentials_by_issuer(&env, issuer);
+        assert_eq!(issuer_creds.len(), 1);
+        assert_eq!(issuer_creds[0], 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Issuer not found")]
+    fn test_issue_credential_by_unregistered() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        let unregistered = TestAddress(&[2u8; 32]);
+        let holder = TestAddress(&[3u8; 32]);
+
+        VeridianContract::initialize(env.clone(), admin.clone(), 0, 0);
+
+        VeridianContract::issue_credential(
+            env.clone(),
+            holder.clone(),
+            String::from_str(&env, "Degree"),
+            generate_data_hash(),
+            0,
+        );
+    }
+
+    #[test]
+    fn test_revoke_credential() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        let issuer = TestAddress(&[2u8; 32]);
+        let holder = TestAddress(&[3u8; 32]);
+
+        VeridianContract::initialize(env.clone(), admin.clone(), 0, 0);
+
+        let metadata_hash = generate_metadata_hash();
+        VeridianContract::register_issuer(
+            env.clone(),
+            String::from_str(&env, "MIT"),
+            IssuerCategory::Education,
+            metadata_hash,
+        );
+
+        let credential_id = VeridianContract::issue_credential(
+            env.clone(),
+            holder.clone(),
+            String::from_str(&env, "Degree"),
+            generate_data_hash(),
+            0,
+        );
+
+        VeridianContract::revoke_credential(env.clone(), credential_id);
+
+        let credential = get_credential(&env, credential_id).unwrap();
+        assert_eq!(credential.status, CredentialStatus::Revoked);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unauthorized")]
+    fn test_revoke_credential_by_wrong_address() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        let issuer = TestAddress(&[2u8; 32]);
+        let wrong_issuer = TestAddress(&[4u8; 32]);
+        let holder = TestAddress(&[3u8; 32]);
+
+        VeridianContract::initialize(env.clone(), admin.clone(), 0, 0);
+
+        let metadata_hash = generate_metadata_hash();
+        VeridianContract::register_issuer(
+            env.clone(),
+            String::from_str(&env, "MIT"),
+            IssuerCategory::Education,
+            metadata_hash,
+        );
+
+        let credential_id = VeridianContract::issue_credential(
+            env.clone(),
+            holder.clone(),
+            String::from_str(&env, "Degree"),
+            generate_data_hash(),
+            0,
+        );
+
+        env.clear_auths();
+        env.mock_auths(&[(&wrong_issuer, &[])]);
+        VeridianContract::revoke_credential(env.clone(), credential_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Credential already revoked or expired")]
+    fn test_revoke_already_revoked() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        let issuer = TestAddress(&[2u8; 32]);
+        let holder = TestAddress(&[3u8; 32]);
+
+        VeridianContract::initialize(env.clone(), admin.clone(), 0, 0);
+
+        let metadata_hash = generate_metadata_hash();
+        VeridianContract::register_issuer(
+            env.clone(),
+            String::from_str(&env, "MIT"),
+            IssuerCategory::Education,
+            metadata_hash,
+        );
+
+        let credential_id = VeridianContract::issue_credential(
+            env.clone(),
+            holder.clone(),
+            String::from_str(&env, "Degree"),
+            generate_data_hash(),
+            0,
+        );
+
+        VeridianContract::revoke_credential(env.clone(), credential_id);
+        VeridianContract::revoke_credential(env.clone(), credential_id);
+    }
+
+    #[test]
+    fn test_verify_active_credential() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        let issuer = TestAddress(&[2u8; 32]);
+        let holder = TestAddress(&[3u8; 32]);
+
+        VeridianContract::initialize(env.clone(), admin.clone(), 0, 0);
+
+        let metadata_hash = generate_metadata_hash();
+        VeridianContract::register_issuer(
+            env.clone(),
+            String::from_str(&env, "MIT"),
+            IssuerCategory::Education,
+            metadata_hash,
+        );
+
+        let credential_id = VeridianContract::issue_credential(
+            env.clone(),
+            holder.clone(),
+            String::from_str(&env, "Degree"),
+            generate_data_hash(),
+            0,
+        );
+
+        let result = VeridianContract::verify(env.clone(), credential_id);
+
+        assert_eq!(result.valid, true);
+        assert_eq!(result.credential_id, credential_id);
+        assert_eq!(result.issuer, issuer);
+        assert_eq!(result.holder, holder);
+    }
+
+    #[test]
+    fn test_verify_revoked_credential() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        let issuer = TestAddress(&[2u8; 32]);
+        let holder = TestAddress(&[3u8; 32]);
+
+        VeridianContract::initialize(env.clone(), admin.clone(), 0, 0);
+
+        let metadata_hash = generate_metadata_hash();
+        VeridianContract::register_issuer(
+            env.clone(),
+            String::from_str(&env, "MIT"),
+            IssuerCategory::Education,
+            metadata_hash,
+        );
+
+        let credential_id = VeridianContract::issue_credential(
+            env.clone(),
+            holder.clone(),
+            String::from_str(&env, "Degree"),
+            generate_data_hash(),
+            0,
+        );
+
+        VeridianContract::revoke_credential(env.clone(), credential_id);
+
+        let result = VeridianContract::verify(env.clone(), credential_id);
+
+        assert_eq!(result.valid, false);
+        assert_eq!(result.status, CredentialStatus::Revoked);
+    }
+
+    #[test]
+    fn test_deactivate_issuer() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        let issuer = TestAddress(&[2u8; 32]);
+
+        VeridianContract::initialize(env.clone(), admin.clone(), 0, 0);
+
+        let metadata_hash = generate_metadata_hash();
+        VeridianContract::register_issuer(
+            env.clone(),
+            String::from_str(&env, "MIT"),
+            IssuerCategory::Education,
+            metadata_hash,
+        );
+
+        VeridianContract::deactivate_issuer(env.clone(), issuer.clone());
+
+        let stored_issuer = get_issuer(&env, &issuer).unwrap();
+        assert_eq!(stored_issuer.active, false);
+    }
+
+    #[test]
+    fn test_admin_can_deactivate_issuer() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        let issuer = TestAddress(&[2u8; 32]);
+
+        VeridianContract::initialize(env.clone(), admin.clone(), 0, 0);
+
+        let metadata_hash = generate_metadata_hash();
+        VeridianContract::register_issuer(
+            env.clone(),
+            String::from_str(&env, "MIT"),
+            IssuerCategory::Education,
+            metadata_hash,
+        );
+
+        env.clear_auths();
+        env.mock_auths(&[(&admin, &[])]);
+        VeridianContract::deactivate_issuer(env.clone(), issuer.clone());
+
+        let stored_issuer = get_issuer(&env, &issuer).unwrap();
+        assert_eq!(stored_issuer.active, false);
+    }
+
+    #[test]
+    fn test_reactivate_issuer() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        let issuer = TestAddress(&[2u8; 32]);
+
+        VeridianContract::initialize(env.clone(), admin.clone(), 0, 0);
+
+        let metadata_hash = generate_metadata_hash();
+        VeridianContract::register_issuer(
+            env.clone(),
+            String::from_str(&env, "MIT"),
+            IssuerCategory::Education,
+            metadata_hash,
+        );
+
+        VeridianContract::deactivate_issuer(env.clone(), issuer.clone());
+
+        let stored_issuer = get_issuer(&env, &issuer).unwrap();
+        assert_eq!(stored_issuer.active, false);
+
+        VeridianContract::reactivate_issuer(env.clone(), issuer.clone());
+
+        let stored_issuer = get_issuer(&env, &issuer).unwrap();
+        assert_eq!(stored_issuer.active, true);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unauthorized")]
+    fn test_non_admin_cannot_reactivate() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        let issuer = TestAddress(&[2u8; 32]);
+        let non_admin = TestAddress(&[3u8; 32]);
+
+        VeridianContract::initialize(env.clone(), admin.clone(), 0, 0);
+
+        let metadata_hash = generate_metadata_hash();
+        VeridianContract::register_issuer(
+            env.clone(),
+            String::from_str(&env, "MIT"),
+            IssuerCategory::Education,
+            metadata_hash,
+        );
+
+        VeridianContract::deactivate_issuer(env.clone(), issuer.clone());
+
+        env.clear_auths();
+        env.mock_auths(&[(&non_admin, &[])]);
+        VeridianContract::reactivate_issuer(env.clone(), issuer.clone());
+    }
+
+    #[test]
+    fn test_update_issuer_metadata() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        let issuer = TestAddress(&[2u8; 32]);
+
+        VeridianContract::initialize(env.clone(), admin.clone(), 0, 0);
+
+        let metadata_hash = generate_metadata_hash();
+        VeridianContract::register_issuer(
+            env.clone(),
+            String::from_str(&env, "MIT"),
+            IssuerCategory::Education,
+            metadata_hash,
+        );
+
+        let new_metadata_hash = vec![2u8; 32];
+        VeridianContract::update_issuer_metadata(env.clone(), new_metadata_hash.clone());
+
+        let stored_issuer = get_issuer(&env, &issuer).unwrap();
+        assert_eq!(stored_issuer.metadata_hash, new_metadata_hash);
+    }
+
+    #[test]
+    fn test_get_issuer_at_index() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        let issuer1 = TestAddress(&[2u8; 32]);
+        let issuer2 = TestAddress(&[3u8; 32]);
+
+        VeridianContract::initialize(env.clone(), admin.clone(), 0, 0);
+
+        let metadata_hash = generate_metadata_hash();
+        VeridianContract::register_issuer(
+            env.clone(),
+            String::from_str(&env, "MIT"),
+            IssuerCategory::Education,
+            metadata_hash.clone(),
+        );
+        VeridianContract::register_issuer(
+            env.clone(),
+            String::from_str(&env, "Harvard"),
+            IssuerCategory::Education,
+            metadata_hash,
+        );
+
+        let addr0 = get_issuer_at_index(&env, 0).unwrap();
+        let addr1 = get_issuer_at_index(&env, 1).unwrap();
+
+        assert!(addr0 == issuer1 || addr0 == issuer2);
+        assert!(addr1 == issuer1 || addr1 == issuer2);
+        assert_ne!(addr0, addr1);
+    }
+
+    #[test]
+    fn test_get_credential_count() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = TestAddress(&[1u8; 32]);
+        let holder = TestAddress(&[3u8; 32]);
+
+        VeridianContract::initialize(env.clone(), admin.clone(), 0, 0);
+
+        let metadata_hash = generate_metadata_hash();
+        VeridianContract::register_issuer(
+            env.clone(),
+            String::from_str(&env, "MIT"),
+            IssuerCategory::Education,
+            metadata_hash,
+        );
+
+        VeridianContract::issue_credential(
+            env.clone(),
+            holder.clone(),
+            String::from_str(&env, "Degree"),
+            generate_data_hash(),
+            0,
+        );
+
+        let count = get_credential_count(&env);
+        assert_eq!(count, 1);
+    }
+}

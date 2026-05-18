@@ -47,11 +47,37 @@ npm run dev
 
 ```
 veridian/
-├── contracts/credentials/  # Soroban smart contract
-├── frontend/              # Next.js frontend
+├── contracts/credentials/  # Soroban smart contract (Rust)
+│   └── src/
+│       ├── lib.rs         # Contract entry point
+│       ├── issuers.rs     # Issuer management
+│       ├── credentials.rs # Credential issuance
+│       ├── verification.rs# On-chain verification
+│       └── errors.rs      # Error definitions
+├── frontend/              # Next.js 14 frontend (TypeScript)
+│   ├── app/               # App router pages
+│   ├── components/        # React components
+│   └── lib/               # Stellar & contract utilities
 ├── docs/                  # Documentation
+│   ├── ISSUER_GUIDE.md   # How to use as issuer
+│   └── CONTRIBUTING.md   # Contribution guide
 └── README.md
 ```
+
+## Features
+
+- **Issuer Registration**: Register institutions on-chain with name, category, and metadata
+- **Credential Issuance**: Issue verifiable credentials to any Stellar address
+- **On-chain Verification**: Anyone can verify credentials in real-time without contacting the issuer
+- **Credential Revocation**: Issuers can revoke credentials at any time
+- **Expiry Support**: Credentials can have optional expiry dates
+
+## Tech Stack
+
+- **Smart Contract**: Rust / Soroban SDK
+- **Frontend**: Next.js 14, TypeScript, Tailwind CSS
+- **Wallet**: Freighter Wallet
+- **Blockchain**: Stellar Testnet
 
 ## Documentation
 
